@@ -1,15 +1,53 @@
 const port = process.env.PORT || 3001;
 const io = require('socket.io')(port, { cors: { origin: "*" } });
 
-// ... rest of your code ...
+let users = {};        // socket.id: username
+let queue = [];        // Players waiting for a match
+let matches = {};      // socket.id: match object
+let rematchBlock = {}; // Prevents instant rematch
 
+const PROMPTS = [
+  "Draw a mountain", "Draw a cat", "Draw a castle", "Draw a robot", "Draw a fish"
+];
 
-let users = {};
-let queue = [];
-let matches = {};
-let rematchBlock = {}; // To prevent instant rematch if one player didn't queue yet
+function getRandomPrompt() {
+  return PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
+}
 
-// ... PROMPTS, getRandomPrompt, startMatch, endMatch same as before ...
+function startMatch(p1, p2) {
+  const match = {
+    players: [p1, p2],
+    prompt: getRandomPrompt(),
+    roundStartTime: Date.now(),
+    timer: 60,
+    winner: null,
+    strokes: { [p1]: [], [p2]: [] }
+  };
+  matches[p1] = match;
+  matches[p2] = match;
+
+  io.to(p1).emit("round-start", {
+    prompt: match.prompt,
+    roundStartTime: match.roundStartTime,
+    timer: match.timer,
+    players: [users[p1], users[p2]],
+    youAre: 0
+  });
+  io.to(p2).emit("round-start", {
+    prompt: match.prompt,
+    roundStartTime: match.roundStartTime,
+    timer: match.timer,
+    players: [users[p1], users[p2]],
+    youAre: 1
+  });
+}
+
+function endMatch(p1, p2, winnerName) {
+  io.to(p1).emit("round-ended", { winner: winnerName });
+  io.to(p2).emit("round-ended", { winner: winnerName });
+  delete matches[p1];
+  delete matches[p2];
+}
 
 io.on('connection', (socket) => {
   socket.on("join", ({ username }) => {
@@ -19,12 +57,10 @@ io.on('connection', (socket) => {
   });
 
   function tryMatch() {
-    // Only match players who are NOT in a recent rematch block with each other
     for (let i = 0; i < queue.length; ++i) {
       for (let j = i + 1; j < queue.length; ++j) {
         const p1 = queue[i], p2 = queue[j];
         if (!rematchBlock[p1] || rematchBlock[p1] !== p2) {
-          // Remove both from queue and match them
           queue = queue.filter(id => id !== p1 && id !== p2);
           startMatch(p1, p2);
           return;
@@ -34,12 +70,8 @@ io.on('connection', (socket) => {
   }
 
   socket.on("play-again", () => {
-    // Add to queue, but don't let them match immediately with last opponent
     if (!queue.includes(socket.id)) queue.push(socket.id);
-
-    // Remove rematchBlock for this player (they are now ready)
     delete rematchBlock[socket.id];
-
     tryMatch();
   });
 
@@ -76,7 +108,7 @@ io.on('connection', (socket) => {
     const [p1, p2] = match.players;
     if (!match.ended) {
       match.ended = true;
-      // Mark both players so they don't rematch each other until both re-queued
+      // Prevent instant rematch
       rematchBlock[p1] = p2;
       rematchBlock[p2] = p1;
       const winnerName = [users[p1], users[p2]][Math.floor(Math.random() * 2)];
@@ -100,3 +132,5 @@ io.on('connection', (socket) => {
     delete rematchBlock[socket.id];
   });
 });
+
+console.log("Socket.io server running on port", port);
