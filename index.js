@@ -1,8 +1,7 @@
 const port = process.env.PORT || 3001;
 const io = require('socket.io')(port, { cors: { origin: "*" } });
 
-let users = {}; // socket.id: username
-
+let users = {};
 let gameState = {
   prompt: null,
   roundStartTime: null,
@@ -11,7 +10,6 @@ let gameState = {
   winner: null
 };
 
-// Helper to get a prompt (keep same as your frontend PROMPTS)
 const PROMPTS = [
   "Draw a mountain", "Draw a cat", "Draw a castle", "Draw a robot", "Draw a fish"
 ];
@@ -43,7 +41,11 @@ function startRound() {
 io.on('connection', (socket) => {
   socket.on("join", ({ username }) => {
     users[socket.id] = username;
-    if (!gameState.players.includes(socket.id)) {
+
+    // If this is the only player, reset everything (stateless MVP)
+    if (Object.keys(users).length === 1) {
+      gameState.players = [socket.id];
+    } else if (!gameState.players.includes(socket.id)) {
       gameState.players.push(socket.id);
     }
 
@@ -51,7 +53,6 @@ io.on('connection', (socket) => {
     if (gameState.players.length === 2) {
       startRound();
     } else {
-      // Update names for new joiner
       broadcastGameState();
     }
   });
@@ -64,9 +65,7 @@ io.on('connection', (socket) => {
     socket.broadcast.emit("opponent-clear");
   });
 
-  // When a player says "end-round", server determines winner and broadcasts
   socket.on("end-round", () => {
-    // For MVP: Random winner, but synced!
     if (gameState.players.length === 2) {
       const [p1, p2] = gameState.players;
       const winnerIndex = Math.floor(Math.random() * 2);
