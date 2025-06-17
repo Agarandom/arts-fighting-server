@@ -1,3 +1,9 @@
+const port = process.env.PORT || 3001;
+const io = require('socket.io')(port, { cors: { origin: "*" } });
+
+// ... rest of your code ...
+
+
 let users = {};
 let queue = [];
 let matches = {};
