@@ -1,10 +1,15 @@
+const express = require("express");
+const app = express();
+const server = require("http").createServer(app);
+const io = require("socket.io")(server, { cors: { origin: "*" } });
 const port = process.env.PORT || 3001;
-const io = require('socket.io')(port, { cors: { origin: "*" } });
 
-let users = {};        // socket.id: username
-let queue = [];        // Players waiting for a match
+// In-memory state
+let users = {};        // socket.id: { username, userId }
+let queue = [];        // Players waiting for match
 let matches = {};      // socket.id: match object
 let rematchBlock = {}; // Prevents instant rematch
+let history = {};      // userId: [ { prompt, result, opponent, timestamp }, ... ]
 
 const PROMPTS = [
   "Draw a mountain", "Draw a cat", "Draw a castle", "Draw a robot", "Draw a fish"
@@ -30,14 +35,14 @@ function startMatch(p1, p2) {
     prompt: match.prompt,
     roundStartTime: match.roundStartTime,
     timer: match.timer,
-    players: [users[p1], users[p2]],
+    players: [users[p1].username, users[p2].username],
     youAre: 0
   });
   io.to(p2).emit("round-start", {
     prompt: match.prompt,
     roundStartTime: match.roundStartTime,
     timer: match.timer,
-    players: [users[p1], users[p2]],
+    players: [users[p1].username, users[p2].username],
     youAre: 1
   });
 }
@@ -45,14 +50,34 @@ function startMatch(p1, p2) {
 function endMatch(p1, p2, winnerName) {
   io.to(p1).emit("round-ended", { winner: winnerName });
   io.to(p2).emit("round-ended", { winner: winnerName });
+
+  const prompt = matches[p1]?.prompt || "unknown";
+  const timestamp = Date.now();
+
+  [p1, p2].forEach((playerSocket, idx) => {
+    const otherSocket = idx === 0 ? p2 : p1;
+    const user = users[playerSocket];
+    const opponent = users[otherSocket];
+    if (!user || !opponent) return;
+
+    const result = winnerName === user.username ? "win" : "loss";
+    if (!history[user.userId]) history[user.userId] = [];
+
+    history[user.userId].push({
+      prompt,
+      result,
+      opponent: opponent.username,
+      timestamp
+    });
+  });
+
   delete matches[p1];
   delete matches[p2];
 }
 
 io.on('connection', (socket) => {
-  socket.on("join", ({ username }) => {
-    users[socket.id] = username;
-    // Don't queue yet! Only after "play-again"
+  socket.on("join", ({ username, userId }) => {
+    users[socket.id] = { username, userId };
     socket.emit("joined");
   });
 
@@ -108,10 +133,9 @@ io.on('connection', (socket) => {
     const [p1, p2] = match.players;
     if (!match.ended) {
       match.ended = true;
-      // Prevent instant rematch
       rematchBlock[p1] = p2;
       rematchBlock[p2] = p1;
-      const winnerName = [users[p1], users[p2]][Math.floor(Math.random() * 2)];
+      const winnerName = [users[p1].username, users[p2].username][Math.floor(Math.random() * 2)];
       endMatch(p1, p2, winnerName);
     }
   });
@@ -133,4 +157,11 @@ io.on('connection', (socket) => {
   });
 });
 
-console.log("Socket.io server running on port", port);
+// Optional: HTTP endpoint to fetch match history for a given userId
+app.get("/history/:userId", (req, res) => {
+  res.json(history[req.params.userId] || []);
+});
+
+server.listen(port, () => {
+  console.log("Server running on port", port);
+});
