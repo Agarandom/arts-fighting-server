@@ -187,10 +187,8 @@ app.get("/history/:userId", async (req, res) => {
       .toArray();
     res.json(docs);
   } catch (err) {
-    res.status(500).json({ error: "DB error" });
+    console.error("MongoDB history error:", err);
+    res.status(500).json({ error: "DB error", details: String(err) });
   }
 });
 
-server.listen(port, () => {
-  console.log("Server running on port", port);
-});
