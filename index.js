@@ -4,12 +4,26 @@ const server = require("http").createServer(app);
 const io = require("socket.io")(server, { cors: { origin: "*" } });
 const port = process.env.PORT || 3001;
 
-// In-memory state
+// === MongoDB Setup ===
+const { MongoClient } = require("mongodb");
+const MONGO_URI = "mongodb+srv://Agarandom:AQeonTw62Z44GPgJ@artfightingcluster.tnw14dv.mongodb.net/?retryWrites=true&w=majority&appName=ArtFightingCluster";
+const client = new MongoClient(MONGO_URI);
+
+let db, matchesCollection;
+
+async function connectDB() {
+  await client.connect();
+  db = client.db("artfighting"); // this database will be created automatically if it doesn't exist
+  matchesCollection = db.collection("matches");
+  console.log("Connected to MongoDB");
+}
+connectDB();
+
+// In-memory state (for active games only)
 let users = {};        // socket.id: { username, userId }
 let queue = [];        // Players waiting for match
 let matches = {};      // socket.id: match object
 let rematchBlock = {}; // Prevents instant rematch
-let history = {};      // userId: [ { prompt, result, opponent, timestamp }, ... ]
 
 const PROMPTS = [
   "Draw a mountain", "Draw a cat", "Draw a castle", "Draw a robot", "Draw a fish"
@@ -47,28 +61,34 @@ function startMatch(p1, p2) {
   });
 }
 
-function endMatch(p1, p2, winnerName) {
+async function endMatch(p1, p2, winnerName) {
   io.to(p1).emit("round-ended", { winner: winnerName });
   io.to(p2).emit("round-ended", { winner: winnerName });
 
   const prompt = matches[p1]?.prompt || "unknown";
   const timestamp = Date.now();
 
-  [p1, p2].forEach((playerSocket, idx) => {
+  // Save to MongoDB for both players
+  [p1, p2].forEach(async (playerSocket, idx) => {
     const otherSocket = idx === 0 ? p2 : p1;
     const user = users[playerSocket];
     const opponent = users[otherSocket];
     if (!user || !opponent) return;
 
     const result = winnerName === user.username ? "win" : "loss";
-    if (!history[user.userId]) history[user.userId] = [];
 
-    history[user.userId].push({
-      prompt,
-      result,
-      opponent: opponent.username,
-      timestamp
-    });
+    try {
+      await matchesCollection.insertOne({
+        userId: user.userId,
+        username: user.username,
+        prompt,
+        result,
+        opponent: opponent.username,
+        timestamp
+      });
+    } catch (err) {
+      console.error("Error saving match to DB:", err);
+    }
   });
 
   delete matches[p1];
@@ -157,9 +177,18 @@ io.on('connection', (socket) => {
   });
 });
 
-// Optional: HTTP endpoint to fetch match history for a given userId
-app.get("/history/:userId", (req, res) => {
-  res.json(history[req.params.userId] || []);
+// HTTP endpoint to fetch match history for a given userId from MongoDB
+app.get("/history/:userId", async (req, res) => {
+  try {
+    const docs = await matchesCollection
+      .find({ userId: req.params.userId })
+      .sort({ timestamp: -1 })
+      .limit(100)
+      .toArray();
+    res.json(docs);
+  } catch (err) {
+    res.status(500).json({ error: "DB error" });
+  }
 });
 
 server.listen(port, () => {
