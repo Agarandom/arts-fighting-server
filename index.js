@@ -13,7 +13,7 @@ let db, matchesCollection;
 
 async function connectDB() {
   await client.connect();
-  db = client.db("artfighting"); // this database will be created automatically if it doesn't exist
+  db = client.db("artfighting"); // database auto-creates if needed
   matchesCollection = db.collection("matches");
   console.log("Connected to MongoDB");
 }
@@ -61,6 +61,7 @@ function startMatch(p1, p2) {
   });
 }
 
+// --- FIXED: Use for...of for async DB writes ---
 async function endMatch(p1, p2, winnerName) {
   io.to(p1).emit("round-ended", { winner: winnerName });
   io.to(p2).emit("round-ended", { winner: winnerName });
@@ -68,12 +69,15 @@ async function endMatch(p1, p2, winnerName) {
   const prompt = matches[p1]?.prompt || "unknown";
   const timestamp = Date.now();
 
-  // Save to MongoDB for both players
-  [p1, p2].forEach(async (playerSocket, idx) => {
-    const otherSocket = idx === 0 ? p2 : p1;
+  const players = [
+    { socket: p1, opponent: p2 },
+    { socket: p2, opponent: p1 }
+  ];
+
+  for (const { socket: playerSocket, opponent: otherSocket } of players) {
     const user = users[playerSocket];
     const opponent = users[otherSocket];
-    if (!user || !opponent) return;
+    if (!user || !opponent) continue;
 
     const result = winnerName === user.username ? "win" : "loss";
 
@@ -89,7 +93,7 @@ async function endMatch(p1, p2, winnerName) {
     } catch (err) {
       console.error("Error saving match to DB:", err);
     }
-  });
+  }
 
   delete matches[p1];
   delete matches[p2];
